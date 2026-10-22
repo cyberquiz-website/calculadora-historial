@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Calculadora</title>
+<style>
+:root{
+  --bg:#000;--panel:#1c1c1e;--text:#fff;--muted:#8e8e93;
+  --num:#333336;--fn:#a5a5a8;--fn-text:#000;--op:#ff9f0a;--op-text:#fff;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){--bg:#f2f2f7;--panel:#fff;--text:#000;--muted:#6c6c70;--num:#e3e3e8;--fn:#c7c7cc;--fn-text:#000}
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;min-height:100%}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{display:flex;flex-wrap:wrap;gap:24px;justify-content:center;align-items:flex-start;padding:20px}
+.calc{width:100%;max-width:340px}
+.display{height:130px;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-end;padding:0 8px 10px;overflow:hidden}
+.expr{color:var(--muted);font-size:16px;min-height:22px}
+.value{font-size:72px;font-weight:300;line-height:1.1;white-space:nowrap}
+.keys{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+button{border:0;border-radius:50%;aspect-ratio:1;font-size:30px;font-family:inherit;cursor:pointer;background:var(--num);color:var(--text);transition:filter .1s}
+button:active{filter:brightness(1.5)}
+button.fn{background:var(--fn);color:var(--fn-text)}
+button.op{background:var(--op);color:var(--op-text);font-size:36px}
+button.op.active{background:var(--text);color:var(--op)}
+button.zero{grid-column:span 2;aspect-ratio:auto;border-radius:999px;text-align:left;padding-left:30px}
+.hist{width:100%;max-width:340px;background:var(--panel);border-radius:20px;padding:16px}
+.hist-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.hist-head h2{margin:0;font-size:17px}
+.hist-head button{aspect-ratio:auto;border-radius:8px;font-size:14px;padding:6px 10px;background:var(--num)}
+.list{list-style:none;margin:0;padding:0;max-height:420px;overflow-y:auto}
+.list li{padding:10px 4px;border-bottom:1px solid var(--num);cursor:pointer;text-align:right}
+.list li small{display:block;color:var(--muted);font-size:14px}
+.list li strong{font-size:20px;font-weight:500}
+.empty{color:var(--muted);text-align:center;padding:20px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="calc">
+    <div class="display"><div class="expr" id="expr"></div><div class="value" id="value">0</div></div>
+    <div class="keys" id="keys">
+      <button class="fn" data-a="clear" id="clr">AC</button>
+      <button class="fn" data-a="neg">+/−</button>
+      <button class="fn" data-a="pct">%</button>
+      <button class="op" data-a="op" data-v="/">÷</button>
+      <button data-a="num" data-v="7">7</button><button data-a="num" data-v="8">8</button><button data-a="num" data-v="9">9</button>
+      <button class="op" data-a="op" data-v="*">×</button>
+      <button data-a="num" data-v="4">4</button><button data-a="num" data-v="5">5</button><button data-a="num" data-v="6">6</button>
+      <button class="op" data-a="op" data-v="-">−</button>
+      <button data-a="num" data-v="1">1</button><button data-a="num" data-v="2">2</button><button data-a="num" data-v="3">3</button>
+      <button class="op" data-a="op" data-v="+">+</button>
+      <button class="zero" data-a="num" data-v="0">0</button>
+      <button data-a="dot">,</button>
+      <button class="op" data-a="eq">=</button>
+    </div>
+  </div>
+  <div class="hist">
+    <div class="hist-head"><h2>Historial</h2><button id="clearHist">Borrar</button></div>
+    <ul class="list" id="list"></ul>
+  </div>
+</div>
+
+<script>
+// ===== 1. ESTADO: todo lo que la calculadora "recuerda" =====
+const state = {
+  current: "0",      // número que se está escribiendo (texto)
+  previous: null,    // primer operando
+  operator: null,    // + - * /
+  overwrite: true,   // ¿el próximo dígito reemplaza la pantalla?
+  lastOp: null, lastB: null, // para repetir "=" (ej: 2+3=== → 5, 8, 11)
+  history: []
+};
+const SYM = {"+":"+","-":"−","*":"×","/":"÷"};
+const MAX_DIGITS = 9;
+
+// ===== 2. LÓGICA MATEMÁTICA =====
+function calculate(a, b, op){
+  let r;
+  if (op === "+") r = a + b;
+  if (op === "-") r = a - b;
+  if (op === "*") r = a * b;
+  if (op === "/") { if (b === 0) return NaN; r = a / b; }
+  // Evita 0.1 + 0.2 = 0.30000000000000004
+  return Number(r.toPrecision(12));
+}
+
+// Convierte un número a texto bonito (separador de miles, notación científica)
+function fmt(n){
+  if (Number.isNaN(n)) return "Error";
+  if (!Number.isFinite(n)) return "Error";
+  const abs = Math.abs(n);
+  if (abs !== 0 && (abs >= 1e9 || abs < 1e-6)) return n.toExponential(4).replace(/\.?0+e/, "e");
+  return n.toLocaleString("es-ES", {maximumFractionDigits: 8, useGrouping: true}).replace(/\u00a0/g,"");
+}
+// Formatea lo que se está tecleando sin perder el "0," o ceros finales
+function fmtTyping(s){
+  const neg = s.startsWith("-"); if (neg) s = s.slice(1);
+  const [int, dec] = s.split(".");
+  const intFmt = Number(int).toLocaleString("es-ES", {useGrouping:true}).replace(/\u00a0/g,"");
+  return (neg ? "-" : "") + intFmt + (dec !== undefined ? "," + dec : "");
+}
+
+// ===== 3. ACCIONES =====
+function inputDigit(d){
+  if (state.current === "Error") state.current = "0";
+  if (state.overwrite){ state.current = d; state.overwrite = false; }
+  else {
+    if (state.current.replace(/[-.]/g,"").length >= MAX_DIGITS) return;
+    state.current = state.current === "0" ? d : state.current + d;
+  }
+}
+function inputDot(){
+  if (state.overwrite){ state.current = "0."; state.overwrite = false; return; }
+  if (!state.current.includes(".")) state.current += ".";
+}
+function chooseOp(op){
+  if (state.current === "Error") return;
+  // Encadenar: 2 + 3 + → primero resuelve 2+3
+  if (state.operator && !state.overwrite) equals(true);
+  state.previous = parseFloat(state.current);
+  state.operator = op;
+  state.overwrite = true;
+  state.lastOp = null;
+}
+function equals(chain = false){
+  if (state.current === "Error") return;
+  let a, b, op;
+  if (state.operator){ a = state.previous; b = parseFloat(state.current); op = state.operator; }
+  else if (state.lastOp){ a = parseFloat(state.current); b = state.lastB; op = state.lastOp; }
+  else return;
+  const r = calculate(a, b, op);
+  addHistory(`${fmt(a)} ${SYM[op]} ${fmt(b)}`, fmt(r));
+  state.lastOp = chain ? null : op; state.lastB = b;
+  state.operator = null; state.previous = chain ? r : null;
+  state.current = Number.isNaN(r) ? "Error" : String(r);
+  state.overwrite = true;
+}
+function negate(){
+  if (state.current === "Error" || state.current === "0") return;
+  state.current = state.current.startsWith("-") ? state.current.slice(1) : "-" + state.current;
+}
+function percent(){
+  if (state.current === "Error") return;
+  let v = parseFloat(state.current);
+  // 200 + 10 % → 20 (10% de 200); solo "50 %" → 0.5
+  v = state.operator && state.previous !== null ? state.previous * v / 100 : v / 100;
+  state.current = String(Number(v.toPrecision(12)));
+  state.overwrite = true;
+}
+function clear(){
+  // Como en el iPhone: "C" borra solo lo escrito, "AC" borra todo
+  if (!state.overwrite && state.current !== "0"){ state.current = "0"; state.overwrite = true; return; }
+  Object.assign(state, {current:"0", previous:null, operator:null, overwrite:true, lastOp:null, lastB:null});
+}
+function backspace(){
+  if (state.overwrite || state.current === "Error") return;
+  state.current = state.current.slice(0,-1);
+  if (state.current === "" || state.current === "-") { state.current = "0"; state.overwrite = true; }
+}
+
+// ===== 4. HISTORIAL (se guarda en localStorage) =====
+function addHistory(expr, result){
+  state.history.unshift({expr, result});
+  state.history = state.history.slice(0, 50);
+  try { localStorage.setItem("calc-history", JSON.stringify(state.history)); } catch(e){}
+}
+function loadHistory(){
+  try { state.history = JSON.parse(localStorage.getItem("calc-history")) || []; } catch(e){ state.history = []; }
+}
+
+// ===== 5. RENDER: dibuja el estado en pantalla =====
+const $ = id => document.getElementById(id);
+function render(){
+  const v = $("value");
+  const txt = state.current === "Error" ? "Error" : (state.overwrite ? fmt(parseFloat(state.current)) : fmtTyping(state.current));
+  v.textContent = txt;
+  v.style.fontSize = txt.length > 11 ? "36px" : txt.length > 8 ? "52px" : "72px";
+  $("expr").textContent = state.operator ? `${fmt(state.previous)} ${SYM[state.operator]}` : "";
+  $("clr").textContent = (!state.overwrite && state.current !== "0") ? "C" : "AC";
+  document.querySelectorAll("button.op[data-v]").forEach(b =>
+    b.classList.toggle("active", state.operator === b.dataset.v && state.overwrite));
+  const list = $("list");
+  list.innerHTML = state.history.length ? "" : '<div class="empty">Aún no hay operaciones</div>';
+  state.history.forEach(h => {
+    const li = document.createElement("li");
+    li.innerHTML = `<small></small><strong></strong>`;
+    li.children[0].textContent = h.expr + " =";
+    li.children[1].textContent = h.result;
+    li.title = "Usar este resultado";
+    li.onclick = () => {
+      const n = parseFloat(h.result.replace(/\./g,"").replace(",","."));
+      if (!Number.isNaN(n)){ state.current = String(n); state.overwrite = true; render(); }
+    };
+    list.appendChild(li);
+  });
+}
+
+// ===== 6. EVENTOS: botones y teclado =====
+function handle(a, v){
+  if (a === "num") inputDigit(v);
+  else if (a === "dot") inputDot();
+  else if (a === "op") chooseOp(v);
+  else if (a === "eq") equals();
+  else if (a === "neg") negate();
+  else if (a === "pct") percent();
+  else if (a === "clear") clear();
+  render();
+}
+$("keys").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (b) handle(b.dataset.a, b.dataset.v);
+});
+document.addEventListener("keydown", e => {
+  const k = e.key;
+  if (/^[0-9]$/.test(k)) handle("num", k);
+  else if (k === "." || k === ",") handle("dot");
+  else if ("+-*/".includes(k)) handle("op", k);
+  else if (k === "Enter" || k === "=") { e.preventDefault(); handle("eq"); }
+  else if (k === "%") handle("pct");
+  else if (k === "Backspace") { backspace(); render(); }
+  else if (k === "Escape") { state.overwrite = true; handle("clear"); }
+});
+$("clearHist").onclick = () => {
+  state.history = [];
+  try { localStorage.removeItem("calc-history"); } catch(e){}
+  render();
+};
+
+loadHistory();
+render();
+</script>
+</body>
+</html>
